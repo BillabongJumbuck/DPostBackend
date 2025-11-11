@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from typing import Optional
@@ -8,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GITHUB_API_BASE = "https://api.github.com"
+logger = logging.getLogger("app.github_client")
 
 
 def get_github_pat() -> str:
@@ -37,6 +39,7 @@ def parse_repo_url(repo_url: str) -> Optional[tuple[str, str]]:
 	if http_match:
 		return http_match.group("owner"), http_match.group("repo")
 
+	logger.debug("Failed to parse repository URL: %s", repo_url)
 	return None
 
 
@@ -45,10 +48,12 @@ async def fork_repository(repo_url: str, org: Optional[str] = None, timeout_seco
 	Trigger a fork on GitHub. If 'org' provided, fork into that organization, else into the authenticated user.
 	Returns the GitHub API response JSON.
 	"""
+	logger.info("Fork request: repo_url=%s, org=%s", repo_url, org)
 	parsed = parse_repo_url(repo_url)
 	if not parsed:
 		raise ValueError("Invalid GitHub repository URL")
 	owner, repo = parsed
+	logger.debug("Parsed repo: owner=%s, repo=%s", owner, repo)
 
 	pat = get_github_pat()
 	headers = {
@@ -62,20 +67,28 @@ async def fork_repository(repo_url: str, org: Optional[str] = None, timeout_seco
 		payload["organization"] = org
 
 	url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/forks"
+	logger.debug("POST %s payload=%s", url, payload or None)
 
 	async with httpx.AsyncClient(timeout=timeout_seconds) as client:
 		response = await client.post(url, headers=headers, json=payload or None)
+		logger.info("GitHub response: status=%s", response.status_code)
 		if response.status_code >= 400:
 			# Surface useful error information
 			try:
 				err_json = response.json()
 			except Exception:
 				err_json = {"message": response.text}
+			logger.error("GitHub API error %s: %s", response.status_code, err_json)
 			raise httpx.HTTPStatusError(
 				message=f"GitHub API error {response.status_code}: {err_json.get('message')}",
 				request=response.request,
 				response=response,
 			)
-		return response.json()
+		try:
+			body = response.json()
+		except Exception:
+			body = {"message": "<non-json-response>"}
+		logger.debug("GitHub success body received")
+		return body
 
 

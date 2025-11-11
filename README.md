@@ -36,6 +36,12 @@ GITHUB_PAT=ghp_xxx_your_personal_access_token
 ```
 PAT 需要具备 `public_repo`（公共仓库）或 `repo`（含私有仓库）权限。
 
+可选：设置日志等级
+```
+LOG_LEVEL=DEBUG
+```
+可选值：DEBUG/INFO/WARNING/ERROR/CRITICAL（默认 INFO）
+
 ## API
 
 ### Fork 仓库
