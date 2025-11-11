@@ -46,7 +46,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 	print(f"Scopes         : {scopes}")
 	print(f"Rate Limit     : {rate_limit} (remaining {rate_remaining})")
 
-	if args.show-headers:
+	if args.show_headers:
 		print("\n=== Response Headers ===")
 		for k, v in headers.items():
 			print(f"{k}: {v}")
