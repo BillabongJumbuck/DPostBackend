@@ -1,16 +1,16 @@
 import argparse
 import os
-from typing import Optional
+from typing import Optional, Tuple
 
 import httpx
 from dotenv import load_dotenv
 
 
-def fetch_user_and_scopes(token: str, timeout_seconds: float = 15.0) -> tuple[dict, dict]:
+def fetch_user_and_scopes(token: str, timeout_seconds: float = 15.0) -> Tuple[dict, httpx.Headers]:
 	headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
 	with httpx.Client(timeout=timeout_seconds) as client:
 		resp = client.get("https://api.github.com/user", headers=headers)
-		return resp.json(), dict(resp.headers)
+		return resp.json(), resp.headers
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -48,7 +48,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 	if args.show_headers:
 		print("\n=== Response Headers ===")
-		for k, v in headers.items():
+		for k, v in headers.multi_items():
 			print(f"{k}: {v}")
 
 	# Basic guidance
