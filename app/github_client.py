@@ -29,13 +29,13 @@ def parse_repo_url(repo_url: str) -> Optional[tuple[str, str]]:
 	Returns (owner, repo) or None if not matched.
 	"""
 	url = repo_url.strip()
-	ssh_match = re.match(r"^git@github\\.com:(?P<owner>[\\w.-]+)/(?P<repo>[\\w.-]+)(?:\\.git)?$", url)
+	# SSH form
+	ssh_match = re.match(r"^git@github\.com:(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)(?:\.git)?$", url)
 	if ssh_match:
 		return ssh_match.group("owner"), ssh_match.group("repo")
 
-	http_match = re.match(
-		r"^https?://github\\.com/(?P<owner>[\\w.-]+)/(?P<repo>[\\w.-]+)(?:\\.git)?/?$", url
-	)
+	# HTTP/HTTPS form
+	http_match = re.match(r"^https?://github\.com/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)(?:\.git)?/?$", url)
 	if http_match:
 		return http_match.group("owner"), http_match.group("repo")
 

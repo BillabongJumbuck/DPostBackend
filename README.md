@@ -42,6 +42,16 @@ LOG_LEVEL=DEBUG
 ```
 可选值：DEBUG/INFO/WARNING/ERROR/CRITICAL（默认 INFO）
 
+### 测试 GitHub PAT
+
+使用内置脚本快速校验你的 PAT 是否有效、拥有哪些 scopes：
+```powershell
+.\.venv\Scripts\Activate.ps1
+python .\scripts\test_pat.py            # 默认读取 .env 中的 GITHUB_PAT
+python .\scripts\test_pat.py --token "ghp_xxx"  # 或者直接传入
+```
+输出会显示 login、X-OAuth-Scopes、速率限制等信息。
+
 ## API
 
 ### Fork 仓库
