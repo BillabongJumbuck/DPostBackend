@@ -18,6 +18,17 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## 运行（FastAPI + Uvicorn）
+
+开发模式自动重载：
+```powershell
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+访问：
+- 健康检查: `http://127.0.0.1:8000/health`
+- 文档: `http://127.0.0.1:8000/docs`
+
 ## 常用命令
 
 - 激活虚拟环境：
