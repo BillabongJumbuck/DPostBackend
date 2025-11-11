@@ -19,5 +19,6 @@ build/
 Thumbs.db
 .idea/
 .vscode/
+.env
 
 

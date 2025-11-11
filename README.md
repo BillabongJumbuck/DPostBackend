@@ -29,6 +29,33 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - 健康检查: `http://127.0.0.1:8000/health`
 - 文档: `http://127.0.0.1:8000/docs`
 
+## 环境变量
+在项目根目录创建 `.env` 文件（已在 `.gitignore` 中忽略），至少包含：
+```
+GITHUB_PAT=ghp_xxx_your_personal_access_token
+```
+PAT 需要具备 `public_repo`（公共仓库）或 `repo`（含私有仓库）权限。
+
+## API
+
+### Fork 仓库
+- 路径: `POST /repos/fork`
+- 请求体:
+```json
+{
+  "repo_url": "https://github.com/owner/repo",
+  "org": "optional-org-name"
+}
+```
+- 成功响应:
+```json
+{
+  "status": "ok",
+  "data": { "...": "GitHub API response" }
+}
+```
+- 失败响应: `400`（请求不合法）或 `502`（GitHub API 错误信息）
+
 ## 常用命令
 
 - 激活虚拟环境：
