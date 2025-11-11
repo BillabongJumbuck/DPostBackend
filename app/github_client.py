@@ -32,12 +32,20 @@ def parse_repo_url(repo_url: str) -> Optional[tuple[str, str]]:
 	# SSH form
 	ssh_match = re.match(r"^git@github\.com:(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)(?:\.git)?$", url)
 	if ssh_match:
-		return ssh_match.group("owner"), ssh_match.group("repo")
+		owner = ssh_match.group("owner")
+		repo = ssh_match.group("repo")
+		if repo.lower().endswith(".git"):
+			repo = repo[:-4]
+		return owner, repo
 
 	# HTTP/HTTPS form
 	http_match = re.match(r"^https?://github\.com/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)(?:\.git)?/?$", url)
 	if http_match:
-		return http_match.group("owner"), http_match.group("repo")
+		owner = http_match.group("owner")
+		repo = http_match.group("repo")
+		if repo.lower().endswith(".git"):
+			repo = repo[:-4]
+		return owner, repo
 
 	logger.debug("Failed to parse repository URL: %s", repo_url)
 	return None
@@ -60,6 +68,7 @@ async def fork_repository(repo_url: str, org: Optional[str] = None, timeout_seco
 		"Accept": "application/vnd.github+json",
 		"Authorization": f"Bearer {pat}",
 		"X-GitHub-Api-Version": "2022-11-28",
+		"User-Agent": "DPostBackend/0.1 (+fastapi; httpx)",
 	}
 
 	payload = {}
