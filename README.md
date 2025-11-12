@@ -47,6 +47,15 @@ LOG_LEVEL=DEBUG
 ```
 可选值：DEBUG/INFO/WARNING/ERROR/CRITICAL（默认 INFO）
 
+### 数据库
+
+默认使用 SQLite（`./data/cache.db`）缓存仓库 fork 请求的响应，首次启动会自动建表。
+如需自定义路径，可设置环境变量：
+```
+DATABASE_URL=sqlite:///./data/cache.db
+```
+也可切换为其他 SQLAlchemy 支持的数据库。
+
 ### 测试 GitHub PAT
 
 使用内置脚本快速校验你的 PAT 是否有效、拥有哪些 scopes：
@@ -76,6 +85,35 @@ python .\scripts\test_pat.py --token "ghp_xxx"  # 或者直接传入
 }
 ```
 - 失败响应: `400`（请求不合法）或 `502`（GitHub API 错误信息）
+
+### 提交测试用例
+- 路径: `POST /repos/test`
+- 请求方式: `multipart/form-data`
+- 请求参数:
+  - `repo_url` (string, required): GitHub 仓库地址
+  - `org` (string, optional): 组织名称
+  - `tech_stack` (string, required): 技术栈，可选值：
+    - `springboot_maven`
+    - `nodejs_express`
+    - `python_flask`
+  - `test_case_file` (file, required): OpenAPI 规范的测试用例 JSON 文件
+- 成功响应:
+```json
+{
+  "status": "ok",
+  "message": "Test case saved successfully",
+  "file_path": "./data/test_cases/owner_repo_org.json",
+  "repo_full_name": "owner/repo",
+  "org": "org-name",
+  "tech_stack": "springboot_maven"
+}
+```
+- 失败响应:
+  - `400`: 请求参数不合法（无效的 tech_stack、无效的仓库 URL、无效的 JSON 文件）
+  - `404`: 仓库未在数据库中找到（需要先 fork）
+  - `500`: 服务器内部错误
+
+**注意**: 测试用例文件会保存在 `./data/test_cases/` 目录下，文件名格式为 `{owner}_{repo}_{org}.json`（如果提供了 org）或 `{owner}_{repo}.json`（如果未提供 org）。如果文件已存在，会被覆盖。
 
 ## 常用命令
 

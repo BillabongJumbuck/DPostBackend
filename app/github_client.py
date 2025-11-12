@@ -6,6 +6,8 @@ from typing import Optional
 import httpx
 from dotenv import load_dotenv
 
+from .cache import get_cached_response, upsert_cached_response
+
 load_dotenv()
 
 GITHUB_API_BASE = "https://api.github.com"
@@ -51,17 +53,32 @@ def parse_repo_url(repo_url: str) -> Optional[tuple[str, str]]:
 	return None
 
 
-async def fork_repository(repo_url: str, org: Optional[str] = None, timeout_seconds: float = 15.0) -> dict:
+async def fork_repository(
+	repo_url: str,
+	org: Optional[str] = None,
+	timeout_seconds: float = 15.0,
+	use_cache: bool = True,
+) -> dict:
 	"""
 	Trigger a fork on GitHub. If 'org' provided, fork into that organization, else into the authenticated user.
 	Returns the GitHub API response JSON.
 	"""
 	logger.info("Fork request: repo_url=%s, org=%s", repo_url, org)
+	repo_url = str(repo_url).strip()
+	org = str(org).strip() if org else None
 	parsed = parse_repo_url(repo_url)
 	if not parsed:
 		raise ValueError("Invalid GitHub repository URL")
 	owner, repo = parsed
 	logger.debug("Parsed repo: owner=%s, repo=%s", owner, repo)
+
+	repo_full_name = f"{owner}/{repo}"
+
+	if use_cache:
+		cached = await get_cached_response(repo_full_name, org)
+		if cached is not None:
+			logger.info("Cache hit for repo=%s org=%s", repo_full_name, org)
+			return cached
 
 	pat = get_github_pat()
 	headers = {
@@ -98,6 +115,9 @@ async def fork_repository(repo_url: str, org: Optional[str] = None, timeout_seco
 		except Exception:
 			body = {"message": "<non-json-response>"}
 		logger.debug("GitHub success body received")
+
+		if use_cache:
+			await upsert_cached_response(repo_full_name, org, body)
 		return body
 
 
