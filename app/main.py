@@ -5,11 +5,11 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
-from .cache import repository_exists
+from .cache import delete_cached_response, repository_exists
 from .database import init_db
 from .github_client import fork_repository, parse_repo_url
 from .logging_config import configure_logging
-from .test_case_storage import save_test_case, test_case_exists
+from .test_case_storage import delete_test_case, save_test_case, test_case_exists
 
 configure_logging()
 app = FastAPI(title="DPostBackend", version="0.1.0")
@@ -221,3 +221,68 @@ async def update_test_case(
 		raise HTTPException(status_code=500, detail=f"Error updating test case: {e}")
 
 
+
+class DeleteRepositoryRequest(BaseModel):
+	repo_url: str
+	org: str | None = None
+
+
+@app.delete("/repos")
+async def delete_repository_endpoint(payload: DeleteRepositoryRequest):
+	"""
+	Delete a repository from local cache.
+	Removes cache from database and deletes test case file if exists.
+	Note: This does NOT delete the repository from GitHub.
+	"""
+	logger.info("DELETE /repos received: repo_url=%s, org=%s", payload.repo_url, payload.org)
+
+	# Parse repository URL
+	parsed = parse_repo_url(payload.repo_url.strip())
+	if not parsed:
+		raise HTTPException(status_code=400, detail="Invalid GitHub repository URL")
+	original_owner, repo = parsed
+	repo_full_name = f"{original_owner}/{repo}"
+
+	# Normalize org
+	normalized_org = payload.org.strip() if payload.org and payload.org.strip() else None
+
+	# Check if repository exists in database
+	exists = await repository_exists(repo_full_name, normalized_org)
+	if not exists:
+		raise HTTPException(
+			status_code=404,
+			detail=f"Repository {repo_full_name} (org={normalized_org}) not found in database.",
+		)
+
+	# Delete from database
+	db_deleted = False
+	try:
+		db_deleted = await delete_cached_response(repo_full_name, normalized_org)
+		logger.info("Repository deleted from database: %s", repo_full_name)
+	except Exception as e:
+		logger.error("Error deleting repository from database: %s", e, exc_info=True)
+		raise HTTPException(status_code=500, detail=f"Error deleting repository from database: {e}")
+
+	# Delete test case file if exists
+	test_case_deleted = False
+	try:
+		test_case_deleted = await delete_test_case(original_owner, repo, normalized_org)
+		if test_case_deleted:
+			logger.info("Test case file deleted")
+	except Exception as e:
+		logger.error("Error deleting test case file: %s", e, exc_info=True)
+		# Don't fail the request if test case deletion fails
+
+	# Return result
+	result = {
+		"status": "ok",
+		"message": "Repository deleted from local cache successfully",
+		"repo_full_name": repo_full_name,
+		"org": normalized_org,
+		"deleted_from": {
+			"database": db_deleted,
+			"test_case_file": test_case_deleted,
+		},
+	}
+
+	return result

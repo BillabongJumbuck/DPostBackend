@@ -54,3 +54,18 @@ async def repository_exists(repo_full_name: str, org: Optional[str]) -> bool:
 	return await asyncio.to_thread(_check)
 
 
+async def delete_cached_response(repo_full_name: str, org: Optional[str]) -> bool:
+	"""Delete a repository cache entry from the database. Returns True if deleted, False if not found."""
+	def _delete() -> bool:
+		with SessionLocal() as session:
+			statement = select(RepositoryCache).where(
+				RepositoryCache.repo_full_name == repo_full_name, RepositoryCache.org == org
+			)
+			entry = session.execute(statement).scalar_one_or_none()
+			if not entry:
+				return False
+			session.delete(entry)
+			session.commit()
+			return True
+
+	return await asyncio.to_thread(_delete)

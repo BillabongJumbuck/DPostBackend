@@ -144,6 +144,37 @@ python .\scripts\test_pat.py --token "ghp_xxx"  # 或者直接传入
 
 **注意**: 此接口用于更新已存在的测试用例文件。如果测试用例文件不存在，请先使用 `POST /repos/test` 接口提交。
 
+### 删除仓库
+- 路径: `DELETE /repos`
+- 请求体:
+```json
+{
+  "repo_url": "https://github.com/owner/repo",
+  "org": "optional-org-name"
+}
+```
+- 成功响应:
+```json
+{
+  "status": "ok",
+  "message": "Repository deleted from local cache successfully",
+  "repo_full_name": "owner/repo",
+  "org": "org-name",
+  "deleted_from": {
+    "database": true,
+    "test_case_file": true
+  }
+}
+```
+- 失败响应:
+  - `400`: 请求参数不合法（无效的仓库 URL）
+  - `404`: 仓库未在数据库中找到
+  - `500`: 服务器内部错误
+
+**注意**: 
+- 此接口仅删除本地缓存（数据库中的缓存记录和测试用例文件），**不会删除 GitHub 上的仓库**
+- 删除操作不可逆，请谨慎使用
+
 ## 常用命令
 
 - 激活虚拟环境：

@@ -121,3 +121,49 @@ async def fork_repository(
 		return body
 
 
+async def delete_repository(
+	fork_owner: str,
+	repo: str,
+	timeout_seconds: float = 15.0,
+) -> None:
+	"""
+	Delete a forked repository on GitHub.
+	Args:
+		fork_owner: The owner of the forked repository (user or org)
+		repo: The repository name
+	"""
+	logger.info("Delete repository request: fork_owner=%s, repo=%s", fork_owner, repo)
+
+	pat = get_github_pat()
+	headers = {
+		"Accept": "application/vnd.github+json",
+		"Authorization": f"Bearer {pat}",
+		"X-GitHub-Api-Version": "2022-11-28",
+		"User-Agent": "DPostBackend/0.1 (+fastapi; httpx)",
+	}
+
+	url = f"{GITHUB_API_BASE}/repos/{fork_owner}/{repo}"
+	logger.debug("DELETE %s", url)
+
+	async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+		response = await client.delete(url, headers=headers)
+		logger.info("GitHub response: status=%s", response.status_code)
+		# 204 No Content is the expected success response for delete
+		if response.status_code == 204:
+			logger.info("Repository deleted successfully")
+			return
+		# Handle error status codes
+		if response.status_code >= 400:
+			# Surface useful error information
+			try:
+				err_json = response.json()
+			except Exception:
+				err_json = {"message": response.text}
+			logger.error("GitHub API error %s: %s", response.status_code, err_json)
+			raise httpx.HTTPStatusError(
+				message=f"GitHub API error {response.status_code}: {err_json.get('message', 'Unknown error')}",
+				request=response.request,
+				response=response,
+			)
+		# Unexpected status code (not 204 and not error)
+		logger.warning("Unexpected status code: %s", response.status_code)

@@ -76,3 +76,20 @@ async def test_case_exists(owner: str, repo: str, org: str | None) -> bool:
 
 	return await asyncio.to_thread(_check)
 
+
+async def delete_test_case(owner: str, repo: str, org: str | None) -> bool:
+	"""
+	Delete OpenAPI test case file from file system.
+	Returns True if deleted, False if file doesn't exist.
+	"""
+	filename = _generate_filename(owner, repo, org)
+	file_path = TEST_CASES_DIR / filename
+
+	def _delete() -> bool:
+		if not file_path.exists():
+			return False
+		file_path.unlink()
+		logger.info("Test case deleted: %s", file_path)
+		return True
+
+	return await asyncio.to_thread(_delete)
