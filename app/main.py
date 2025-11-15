@@ -369,7 +369,7 @@ async def _push_test_case_and_workflow(
 			repo=fork_repo,
 			path="test_case.json",
 			content=test_case_json_str,
-			message="Update test case file",
+			message="Update test case file [skip ci]",
 			branch=default_branch,
 		)
 		results["files_pushed"].append("test_case.json")
@@ -386,7 +386,7 @@ async def _push_test_case_and_workflow(
 			test_case_path="test_case.json",
 			backend_api_url=api_url,
 		)
-		# Check if workflow file exists before pushing
+		# Check if workflow file exists and if content has changed
 		existing_workflow = await get_file_content(
 			fork_owner=fork_owner,
 			repo=fork_repo,
@@ -395,22 +395,38 @@ async def _push_test_case_and_workflow(
 		)
 		workflow_was_new = existing_workflow is None
 		
-		await create_or_update_file(
-			fork_owner=fork_owner,
-			repo=fork_repo,
-			path=".github/workflows/api-test.yml",
-			content=workflow_content,
-			message="Update GitHub Actions workflow for API testing",
-			branch=default_branch,
-		)
-		results["files_pushed"].append(".github/workflows/api-test.yml")
-		logger.info("GitHub Actions workflow pushed successfully to %s", fork_full_name)
+		# Decode existing workflow content to compare
+		workflow_needs_update = True
+		if existing_workflow and "content" in existing_workflow:
+			import base64
+			try:
+				existing_content = base64.b64decode(existing_workflow["content"]).decode("utf-8")
+				# Normalize both contents (remove trailing whitespace/newlines)
+				if existing_content.strip() == workflow_content.strip():
+					workflow_needs_update = False
+					logger.info("Workflow content unchanged, skipping update")
+			except Exception as e:
+				logger.warning("Failed to decode existing workflow content for comparison: %s", e)
 		
-		# If workflow was newly created, wait a bit for GitHub to register it
-		if workflow_was_new:
-			import asyncio
-			logger.info("Workflow file is new, waiting 3 seconds for GitHub to register it...")
-			await asyncio.sleep(3)
+		if workflow_needs_update:
+			await create_or_update_file(
+				fork_owner=fork_owner,
+				repo=fork_repo,
+				path=".github/workflows/api-test.yml",
+				content=workflow_content,
+				message="Update GitHub Actions workflow for API testing [skip ci]",
+				branch=default_branch,
+			)
+			results["files_pushed"].append(".github/workflows/api-test.yml")
+			logger.info("GitHub Actions workflow pushed successfully to %s", fork_full_name)
+			
+			# If workflow was newly created, wait a bit for GitHub to register it
+			if workflow_was_new:
+				import asyncio
+				logger.info("Workflow file is new, waiting 3 seconds for GitHub to register it...")
+				await asyncio.sleep(3)
+		else:
+			logger.info("Workflow file unchanged, not pushing")
 	except Exception as e:
 		logger.error("Error pushing GitHub Actions workflow: %s", e, exc_info=True)
 		raise
@@ -555,7 +571,7 @@ async def push_test_case_to_repo(payload: PushTestCaseRequest):
 			repo=fork_repo,
 			path=".github/workflows/api-test.yml",
 			content=workflow_content,
-			message="Add GitHub Actions workflow for API testing",
+			message="Add GitHub Actions workflow for API testing [skip ci]",
 			branch=default_branch,
 		)
 		results["files_pushed"].append(".github/workflows/api-test.yml")
