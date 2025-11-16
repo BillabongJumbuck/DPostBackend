@@ -516,6 +516,13 @@ class PushTestCaseRequest(BaseModel):
 	backend_api_url: str | None = None
 
 
+class UpdateWorkflowRequest(BaseModel):
+	repo_url: str
+	org: str | None = None
+	tech_stack: str | None = None
+	backend_api_url: str | None = None
+
+
 @app.post("/repos/push-test")
 async def push_test_case_to_repo(payload: PushTestCaseRequest):
 	"""
@@ -638,5 +645,139 @@ async def push_test_case_to_repo(payload: PushTestCaseRequest):
 	except Exception as e:
 		logger.error("Error pushing GitHub Actions workflow: %s", e, exc_info=True)
 		raise HTTPException(status_code=500, detail=f"Error pushing GitHub Actions workflow: {e}")
+
+	return results
+
+
+@app.put("/repos/update-workflow")
+async def update_workflow(payload: UpdateWorkflowRequest):
+	"""
+	Update the GitHub Actions workflow file in the forked repository.
+	This will regenerate the workflow using the latest workflow_generator.py logic.
+	Requires the repository to be forked.
+	
+	If tech_stack is not provided, it will try to infer from existing workflow or test case.
+	"""
+	logger.info(
+		"PUT /repos/update-workflow received: repo_url=%s, org=%s, tech_stack=%s",
+		payload.repo_url,
+		payload.org,
+		payload.tech_stack,
+	)
+
+	# Parse repository URL
+	parsed = parse_repo_url(payload.repo_url.strip())
+	if not parsed:
+		raise HTTPException(status_code=400, detail="Invalid GitHub repository URL")
+	original_owner, repo = parsed
+	repo_full_name = f"{original_owner}/{repo}"
+
+	# Normalize org
+	normalized_org = payload.org.strip() if payload.org and payload.org.strip() else None
+
+	# Check if repository exists in database
+	exists = await repository_exists(repo_full_name, normalized_org)
+	if not exists:
+		raise HTTPException(
+			status_code=404,
+			detail=f"Repository {repo_full_name} (org={normalized_org}) not found in database. Please fork it first.",
+		)
+
+	# Get fork information from cache
+	fork_info = await get_cached_response(repo_full_name, normalized_org)
+	if not fork_info:
+		raise HTTPException(
+			status_code=404,
+			detail=f"Fork information for {repo_full_name} (org={normalized_org}) not found in cache.",
+		)
+
+	# Extract fork owner and repo name from fork response
+	fork_owner = fork_info.get("owner", {}).get("login")
+	if not fork_owner:
+		raise HTTPException(
+			status_code=500,
+			detail="Failed to extract fork owner from cached response. Please fork the repository again.",
+		)
+	fork_repo = fork_info.get("name", repo)
+	fork_full_name = fork_info.get("full_name", f"{fork_owner}/{fork_repo}")
+	
+	# Get default branch (default to "main", fallback to "master")
+	default_branch = fork_info.get("default_branch", "main")
+	if default_branch not in ["main", "master"]:
+		default_branch = "main"  # Fallback to main if unknown
+
+	# Determine tech_stack if not provided
+	tech_stack = payload.tech_stack
+	if not tech_stack:
+		# Try to get tech_stack from existing test case metadata or workflow
+		# For now, we'll require it to be provided, but we could enhance this later
+		raise HTTPException(
+			status_code=400,
+			detail="tech_stack is required. Please provide one of: springboot_maven, nodejs_express, python_flask",
+		)
+
+	# Validate tech_stack
+	valid_tech_stacks = ["springboot_maven", "nodejs_express", "python_flask"]
+	if tech_stack not in valid_tech_stacks:
+		raise HTTPException(
+			status_code=400,
+			detail=f"Invalid tech_stack. Must be one of: {', '.join(valid_tech_stacks)}",
+		)
+
+	# Get backend API URL (from payload or environment variable)
+	import os
+	backend_api_url = payload.backend_api_url or os.getenv("BACKEND_API_URL", "http://localhost:8000")
+
+	# Prepare results
+	results = {
+		"status": "ok",
+		"message": "Workflow updated successfully",
+		"repo_full_name": repo_full_name,
+		"fork_full_name": fork_full_name,
+		"org": normalized_org,
+		"tech_stack": tech_stack,
+		"workflow_updated": False,
+	}
+
+	# Generate and push GitHub Actions workflow
+	try:
+		workflow_content = generate_workflow(
+			tech_stack=tech_stack,
+			test_case_path="test_case.json",
+			backend_api_url=backend_api_url,
+		)
+		
+		# Check if workflow file exists
+		existing_workflow = await get_file_content(
+			fork_owner=fork_owner,
+			repo=fork_repo,
+			path=".github/workflows/api-test.yml",
+			branch=default_branch,
+		)
+		
+		if existing_workflow is None:
+			logger.warning("Workflow file does not exist in repository, creating new one")
+		
+		# Always update the workflow (since user explicitly requested it)
+		await create_or_update_file(
+			fork_owner=fork_owner,
+			repo=fork_repo,
+			path=".github/workflows/api-test.yml",
+			content=workflow_content,
+			message="Update GitHub Actions workflow for API testing [skip ci]",
+			branch=default_branch,
+		)
+		results["workflow_updated"] = True
+		logger.info("GitHub Actions workflow updated successfully in %s", fork_full_name)
+		
+		# If workflow was newly created, wait a bit for GitHub to register it
+		if existing_workflow is None:
+			import asyncio
+			logger.info("Workflow file is new, waiting 3 seconds for GitHub to register it...")
+			await asyncio.sleep(3)
+			
+	except Exception as e:
+		logger.error("Error updating GitHub Actions workflow: %s", e, exc_info=True)
+		raise HTTPException(status_code=500, detail=f"Error updating GitHub Actions workflow: {e}")
 
 	return results

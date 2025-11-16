@@ -72,6 +72,38 @@ python .\scripts\test_pat.py --token "ghp_xxx"  # 或者直接传入
 ```
 输出会显示 login、X-OAuth-Scopes、速率限制等信息。
 
+### 更新 Workflow 文件
+
+使用内置脚本更新 fork 仓库中的 GitHub Actions workflow 文件：
+```powershell
+.\.venv\Scripts\Activate.ps1
+# 基本用法
+python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --tech-stack springboot_maven
+
+# 带组织名称
+python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --org myorg --tech-stack nodejs_express
+
+# 指定自定义 API URL
+python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --tech-stack python_flask --api-url http://localhost:8000
+
+# 输出 JSON 格式
+python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --tech-stack springboot_maven --json
+```
+
+**参数说明**：
+- `--repo-url` (必需): GitHub 仓库 URL
+- `--tech-stack` (必需): 技术栈类型，可选值：`springboot_maven`、`nodejs_express`、`python_flask`
+- `--org` (可选): 组织名称
+- `--backend-api-url` (可选): 后端 API URL
+- `--api-url` (可选): API 基础 URL，默认为 `http://localhost:8000` 或环境变量 `API_BASE_URL`
+- `--timeout` (可选): 请求超时时间（秒），默认 30.0
+- `--json` (可选): 以 JSON 格式输出结果
+
+**注意**：
+- 此脚本会使用最新的 `workflow_generator.py` 逻辑重新生成 workflow 文件
+- 需要先 fork 仓库（`POST /repos/fork`）
+- 即使 workflow 文件已存在，也会强制更新
+
 ## API
 
 ### Fork 仓库
@@ -232,6 +264,49 @@ python .\scripts\test_pat.py --token "ghp_xxx"  # 或者直接传入
 - 此接口会将测试用例文件（`test_case.json`）和 GitHub Actions 工作流文件（`.github/workflows/api-test.yml`）推送到 fork 的仓库中
 - 需要先 fork 仓库（`POST /repos/fork`）和提交测试用例（`POST /repos/test`）
 - GitHub Actions 工作流会根据技术栈自动生成，包含启动应用、运行测试和发送结果到后端的步骤
+
+### 更新 Workflow 文件
+- 路径: `PUT /repos/update-workflow`
+- 请求体:
+```json
+{
+  "repo_url": "https://github.com/owner/repo",
+  "org": "optional-org-name",
+  "tech_stack": "springboot_maven",
+  "backend_api_url": "http://localhost:8000"
+}
+```
+- 请求参数:
+  - `repo_url` (string, required): GitHub 仓库地址
+  - `org` (string, optional): 组织名称
+  - `tech_stack` (string, required): 技术栈，可选值：
+    - `springboot_maven`
+    - `nodejs_express`
+    - `python_flask`
+  - `backend_api_url` (string, optional): 后端 API URL，用于接收测试结果。如果不提供，将从环境变量 `BACKEND_API_URL` 读取，默认为 `http://localhost:8000`
+- 成功响应:
+```json
+{
+  "status": "ok",
+  "message": "Workflow updated successfully",
+  "repo_full_name": "owner/repo",
+  "fork_full_name": "fork_owner/repo",
+  "org": "org-name",
+  "tech_stack": "springboot_maven",
+  "workflow_updated": true
+}
+```
+- 失败响应:
+  - `400`: 请求参数不合法（无效的 tech_stack、无效的仓库 URL、缺少 tech_stack）
+  - `404`: 仓库未在数据库中找到（需要先 fork）
+  - `500`: 服务器内部错误（更新 workflow 文件失败）
+
+**注意**: 
+- 此接口会使用最新的 `workflow_generator.py` 逻辑重新生成并更新 fork 仓库中的 GitHub Actions workflow 文件
+- 需要先 fork 仓库（`POST /repos/fork`）
+- 即使 workflow 文件已存在，也会强制更新
+- 如果 workflow 文件不存在，会创建新文件
+- 修改 `workflow_generator.py` 后，可以使用此接口批量更新所有仓库的 workflow 文件
 
 ## 常用命令
 
