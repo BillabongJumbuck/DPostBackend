@@ -2,12 +2,17 @@
 Generate GitHub Actions workflow files for different tech stacks.
 """
 import logging
+import os
 from typing import Any
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logger = logging.getLogger("app.workflow_generator")
 
-# Backend API URL - should be configurable via environment variable
-BACKEND_API_URL = "http://localhost:8000"  # Default, should be overridden via env
+# Backend API URL - loaded from environment variable or default
+BACKEND_API_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 
 
 def generate_workflow(
@@ -94,54 +99,44 @@ jobs:
             done
             echo "ERROR: Application did not open port 8080"
             exit 1
-
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       
       - name: Run API tests
         id: test
         run: |
-          python3 << 'EOF'
-          import json
-          import sys
-          
-          # Load test case
-          try:
-              with open('{test_case_path}', 'r') as f:
-                  test_case = json.load(f)
-              print("=" * 60)
-              print("Test Case Loaded Successfully")
-              print("=" * 60)
-              print(json.dumps(test_case, indent=2, ensure_ascii=False))
-              print("=" * 60)
-          except FileNotFoundError:
-              print(f"ERROR: Test case file '{test_case_path}' not found")
-              sys.exit(1)
-          except json.JSONDecodeError as e:
-              print(f"ERROR: Failed to parse test case JSON: {{e}}")
-              sys.exit(1)
-          except Exception as e:
-              print(f"ERROR: Failed to load test case: {{e}}")
-              sys.exit(1)
-          
-          # Run tests (simplified - should be replaced with actual test runner)
-          results = {{
-              "status": "success",
-              "tests": [],
-              "summary": {{
-                  "total": 0,
-                  "passed": 0,
-                  "failed": 0
-              }}
-          }}
-          
-          # Print test results to console
-          print("\\n" + "=" * 60)
-          print("Test Results")
-          print("=" * 60)
-          print(json.dumps(results, indent=2, ensure_ascii=False))
-          print("=" * 60)
-          print(f"Status: {{results['status']}}")
-          print("=" * 60)
-          EOF
+          node test-runner.js {test_case_path}
+      
+      - name: Send test results to backend
+        if: always()
+        run: |
+          if [ -f test_results.json ]; then
+            echo "Sending test results to backend..."
+            REPO_URL="${{{{ github.repository }}}}"
+            ORG="${{{{ github.repository_owner }}}}"
+            WORKFLOW_RUN_ID="${{{{ github.run_id }}}}"
+            WORKFLOW_RUN_URL="${{{{ github.server_url }}}}/${{{{ github.repository }}}}/actions/runs/${{{{ github.run_id }}}}"
+            
+            # Build JSON payload using jq
+            PAYLOAD=$(jq -n \\
+              --arg repo_url "https://github.com/$REPO_URL" \\
+              --arg org "$ORG" \\
+              --arg workflow_run_id "$WORKFLOW_RUN_ID" \\
+              --arg workflow_run_url "$WORKFLOW_RUN_URL" \\
+              --slurpfile test_results test_results.json \\
+              '{{repo_url: $repo_url, org: $org, workflow_run_id: $workflow_run_id, workflow_run_url: $workflow_run_url, test_results: $test_results[0]}}')
+            
+            curl -X POST "${{{{ env.backend_api_url }}}}/repos/test-results" \\
+              -H "Content-Type: application/json" \\
+              -d "$PAYLOAD" || echo "Failed to send test results, but continuing..."
+          else
+            echo "test_results.json not found, skipping..."
+          fi
+        env:
+          backend_api_url: {backend_api_url}
       
       - name: Stop application
         if: always()
@@ -222,49 +217,35 @@ jobs:
       - name: Run API tests
         id: test
         run: |
-          python3 << 'EOF'
-          import json
-          import sys
-          
-          # Load test case
-          try:
-              with open('{test_case_path}', 'r') as f:
-                  test_case = json.load(f)
-              print("=" * 60)
-              print("Test Case Loaded Successfully")
-              print("=" * 60)
-              print(json.dumps(test_case, indent=2, ensure_ascii=False))
-              print("=" * 60)
-          except FileNotFoundError:
-              print(f"ERROR: Test case file '{test_case_path}' not found")
-              sys.exit(1)
-          except json.JSONDecodeError as e:
-              print(f"ERROR: Failed to parse test case JSON: {{e}}")
-              sys.exit(1)
-          except Exception as e:
-              print(f"ERROR: Failed to load test case: {{e}}")
-              sys.exit(1)
-          
-          # Run tests (simplified - should be replaced with actual test runner)
-          results = {{
-              "status": "success",
-              "tests": [],
-              "summary": {{
-                  "total": 0,
-                  "passed": 0,
-                  "failed": 0
-              }}
-          }}
-          
-          # Print test results to console
-          print("\\n" + "=" * 60)
-          print("Test Results")
-          print("=" * 60)
-          print(json.dumps(results, indent=2, ensure_ascii=False))
-          print("=" * 60)
-          print(f"Status: {{results['status']}}")
-          print("=" * 60)
-          EOF
+          node test-runner.js {test_case_path}
+      
+      - name: Send test results to backend
+        if: always()
+        run: |
+          if [ -f test_results.json ]; then
+            echo "Sending test results to backend..."
+            REPO_URL="${{{{ github.repository }}}}"
+            ORG="${{{{ github.repository_owner }}}}"
+            WORKFLOW_RUN_ID="${{{{ github.run_id }}}}"
+            WORKFLOW_RUN_URL="${{{{ github.server_url }}}}/${{{{ github.repository }}}}/actions/runs/${{{{ github.run_id }}}}"
+            
+            # Build JSON payload using jq
+            PAYLOAD=$(jq -n \\
+              --arg repo_url "https://github.com/$REPO_URL" \\
+              --arg org "$ORG" \\
+              --arg workflow_run_id "$WORKFLOW_RUN_ID" \\
+              --arg workflow_run_url "$WORKFLOW_RUN_URL" \\
+              --slurpfile test_results test_results.json \\
+              '{{repo_url: $repo_url, org: $org, workflow_run_id: $workflow_run_id, workflow_run_url: $workflow_run_url, test_results: $test_results[0]}}')
+            
+            curl -X POST "${{{{ env.backend_api_url }}}}/repos/test-results" \\
+              -H "Content-Type: application/json" \\
+              -d "$PAYLOAD" || echo "Failed to send test results, but continuing..."
+          else
+            echo "test_results.json not found, skipping..."
+          fi
+        env:
+          backend_api_url: {backend_api_url}
       
       - name: Stop application
         if: always()
@@ -343,35 +324,43 @@ jobs:
           echo "=== Application Logs (last 20 lines) ==="
           tail -20 app.log || true
       
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
       - name: Run API tests
         id: test
         run: |
-          pip install requests
-          python3 << 'EOF'
-          import json
-          import requests
-          import sys
-          
-          # Load test case
-          with open('{test_case_path}', 'r') as f:
-              test_case = json.load(f)
-          
-          # Run tests (simplified - should be replaced with actual test runner)
-          results = {{"status": "success", "tests": []}}
-          
-          # Send results to backend
-          try:
-              response = requests.post(
-                  '{backend_api_url}/repos/test-results',
-                  json={{"test_results": results}},
-                  timeout=30
-              )
-              response.raise_for_status()
-              print("Test results sent successfully")
-          except Exception as e:
-              print(f"Failed to send results: {{e}}")
-              sys.exit(1)
-          EOF
+          node test-runner.js {test_case_path}
+      
+      - name: Send test results to backend
+        if: always()
+        run: |
+          if [ -f test_results.json ]; then
+            echo "Sending test results to backend..."
+            REPO_URL="${{{{ github.repository }}}}"
+            ORG="${{{{ github.repository_owner }}}}"
+            WORKFLOW_RUN_ID="${{{{ github.run_id }}}}"
+            WORKFLOW_RUN_URL="${{{{ github.server_url }}}}/${{{{ github.repository }}}}/actions/runs/${{{{ github.run_id }}}}"
+            
+            # Build JSON payload using jq
+            PAYLOAD=$(jq -n \\
+              --arg repo_url "https://github.com/$REPO_URL" \\
+              --arg org "$ORG" \\
+              --arg workflow_run_id "$WORKFLOW_RUN_ID" \\
+              --arg workflow_run_url "$WORKFLOW_RUN_URL" \\
+              --slurpfile test_results test_results.json \\
+              '{{repo_url: $repo_url, org: $org, workflow_run_id: $workflow_run_id, workflow_run_url: $workflow_run_url, test_results: $test_results[0]}}')
+            
+            curl -X POST "${{{{ env.backend_api_url }}}}/repos/test-results" \\
+              -H "Content-Type: application/json" \\
+              -d "$PAYLOAD" || echo "Failed to send test results, but continuing..."
+          else
+            echo "test_results.json not found, skipping..."
+          fi
+        env:
+          backend_api_url: {backend_api_url}
       
       - name: Stop application
         if: always()

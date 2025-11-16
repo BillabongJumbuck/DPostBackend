@@ -20,6 +20,6 @@ Thumbs.db
 .idea/
 .vscode/
 .env
-data/test_cases/
+data/*
 
 

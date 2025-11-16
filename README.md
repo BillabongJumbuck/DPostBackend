@@ -72,6 +72,38 @@ python .\scripts\test_pat.py --token "ghp_xxx"  # 或者直接传入
 ```
 输出会显示 login、X-OAuth-Scopes、速率限制等信息。
 
+### 更新 Workflow 文件
+
+使用内置脚本更新 fork 仓库中的 GitHub Actions workflow 文件：
+```powershell
+.\.venv\Scripts\Activate.ps1
+# 基本用法
+python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --tech-stack springboot_maven
+
+# 带组织名称
+python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --org myorg --tech-stack nodejs_express
+
+# 指定自定义 API URL
+python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --tech-stack python_flask --api-url http://localhost:8000
+
+# 输出 JSON 格式
+python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --tech-stack springboot_maven --json
+```
+
+**参数说明**：
+- `--repo-url` (必需): GitHub 仓库 URL
+- `--tech-stack` (必需): 技术栈类型，可选值：`springboot_maven`、`nodejs_express`、`python_flask`
+- `--org` (可选): 组织名称
+- `--backend-api-url` (可选): 后端 API URL
+- `--api-url` (可选): API 基础 URL，默认为 `http://localhost:8000` 或环境变量 `API_BASE_URL`
+- `--timeout` (可选): 请求超时时间（秒），默认 30.0
+- `--json` (可选): 以 JSON 格式输出结果
+
+**注意**：
+- 此脚本会使用最新的 `workflow_generator.py` 逻辑重新生成 workflow 文件
+- 需要先 fork 仓库（`POST /repos/fork`）
+- 即使 workflow 文件已存在，也会强制更新
+
 ## API
 
 ### Fork 仓库
@@ -232,6 +264,127 @@ python .\scripts\test_pat.py --token "ghp_xxx"  # 或者直接传入
 - 此接口会将测试用例文件（`test_case.json`）和 GitHub Actions 工作流文件（`.github/workflows/api-test.yml`）推送到 fork 的仓库中
 - 需要先 fork 仓库（`POST /repos/fork`）和提交测试用例（`POST /repos/test`）
 - GitHub Actions 工作流会根据技术栈自动生成，包含启动应用、运行测试和发送结果到后端的步骤
+
+### 更新 Workflow 文件
+- 路径: `PUT /repos/update-workflow`
+- 请求体:
+```json
+{
+  "repo_url": "https://github.com/owner/repo",
+  "org": "optional-org-name",
+  "tech_stack": "springboot_maven",
+  "backend_api_url": "http://localhost:8000"
+}
+```
+- 请求参数:
+  - `repo_url` (string, required): GitHub 仓库地址
+  - `org` (string, optional): 组织名称
+  - `tech_stack` (string, required): 技术栈，可选值：
+    - `springboot_maven`
+    - `nodejs_express`
+    - `python_flask`
+  - `backend_api_url` (string, optional): 后端 API URL，用于接收测试结果。如果不提供，将从环境变量 `BACKEND_API_URL` 读取，默认为 `http://localhost:8000`
+- 成功响应:
+```json
+{
+  "status": "ok",
+  "message": "Workflow updated successfully",
+  "repo_full_name": "owner/repo",
+  "fork_full_name": "fork_owner/repo",
+  "org": "org-name",
+  "tech_stack": "springboot_maven",
+  "workflow_updated": true
+}
+```
+- 失败响应:
+  - `400`: 请求参数不合法（无效的 tech_stack、无效的仓库 URL、缺少 tech_stack）
+  - `404`: 仓库未在数据库中找到（需要先 fork）
+  - `500`: 服务器内部错误（更新 workflow 文件失败）
+
+**注意**: 
+- 此接口会使用最新的 `workflow_generator.py` 逻辑重新生成并更新 fork 仓库中的 GitHub Actions workflow 文件
+- 需要先 fork 仓库（`POST /repos/fork`）
+- 即使 workflow 文件已存在，也会强制更新
+- 如果 workflow 文件不存在，会创建新文件
+- 修改 `workflow_generator.py` 后，可以使用此接口批量更新所有仓库的 workflow 文件
+
+### 获取最新测试结果
+- 路径: `GET /repos/test-results`
+- 查询参数:
+  - `repo_url` (string, required): GitHub 仓库 URL，例如 `https://github.com/owner/repo`
+  - `org` (string, optional): 组织名称
+- 成功响应:
+```json
+{
+  "status": "ok",
+  "filename": "DPostRobot_hello-spring-boot_DPostRobot_20251116_173514.json",
+  "data": {
+    "repo_url": "https://github.com/DPostRobot/hello-spring-boot",
+    "repo_full_name": "DPostRobot/hello-spring-boot",
+    "org": "DPostRobot",
+    "workflow_run_id": "19403625453",
+    "workflow_run_url": "https://github.com/...",
+    "received_at": "2025-11-16T17:35:14.123456",
+    "test_results": {
+      "testCaseFile": "test_case.json",
+      "config": {...},
+      "total": 16,
+      "passed": 13,
+      "failed": 3,
+      "successRate": 81.25,
+      "timestamp": "2025-11-16T17:35:14.000Z",
+      "tests": [...]
+    }
+  }
+}
+```
+- 失败响应:
+  - `400`: 请求参数不合法（无效的仓库 URL）
+  - `404`: 未找到匹配的测试结果
+
+**注意**: 
+- 此接口返回指定仓库的最新测试结果文件（完整内容）
+- 按文件修改时间倒序查找，返回第一个匹配的结果
+- 如果提供了 `org` 参数，会匹配相同组织的结果；如果不提供，会匹配所有组织的结果
+
+### 获取单个测试结果文件
+- 路径: `GET /repos/test-results/{filename}`
+- 路径参数:
+  - `filename` (string, required): 测试结果文件名，例如 `DPostRobot_hello-spring-boot_DPostRobot_20251116_173514.json`
+- 成功响应:
+```json
+{
+  "status": "ok",
+  "filename": "DPostRobot_hello-spring-boot_DPostRobot_20251116_173514.json",
+  "data": {
+    "repo_url": "https://github.com/DPostRobot/hello-spring-boot",
+    "repo_full_name": "DPostRobot/hello-spring-boot",
+    "org": "DPostRobot",
+    "workflow_run_id": "19403625453",
+    "workflow_run_url": "https://github.com/...",
+    "received_at": "2025-11-16T17:35:14.123456",
+    "test_results": {
+      "testCaseFile": "test_case.json",
+      "config": {...},
+      "total": 16,
+      "passed": 13,
+      "failed": 3,
+      "successRate": 81.25,
+      "timestamp": "2025-11-16T17:35:14.000Z",
+      "tests": [...]
+    }
+  }
+}
+```
+- 失败响应:
+  - `400`: 文件名不合法（包含路径遍历字符）
+  - `404`: 测试结果文件不存在
+  - `500`: 服务器内部错误（文件读取失败或 JSON 解析失败）
+
+**注意**: 
+- 此接口返回完整的测试结果文件内容
+- 文件名必须精确匹配，不支持通配符
+- 为防止路径遍历攻击，文件名中不能包含 `..`、`/`、`\` 等字符
 
 ## 常用命令
 

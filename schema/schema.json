@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/api-test-schema.json",
+  "title": "API Test DSL Schema",
+  "type": "object",
+
+  "properties": {
+    "config": {
+      "type": "object",
+      "properties": {
+        "baseUrl": { "type": "string" },
+        "timeout": { "type": "number", "minimum": 0 },
+        "retries": { "type": "number", "minimum": 0 },
+        "stopOnFailure": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+
+    "variables": {
+      "type": "object",
+      "description": "Global variables",
+      "patternProperties": {
+        "^[a-zA-Z_][a-zA-Z0-9_]*$": {}
+      },
+      "additionalProperties": true
+    },
+
+    "tests": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/test"
+      }
+    }
+  },
+
+  "required": ["tests"],
+
+  "additionalProperties": false,
+
+  "$defs": {
+    "test": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/step" }
+        }
+      },
+      "required": ["name", "steps"],
+      "additionalProperties": false
+    },
+
+    "step": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+
+        "request": { "$ref": "#/$defs/request" },
+
+        "expect": { "$ref": "#/$defs/expect" },
+
+        "extract": {
+          "type": "object",
+          "description": "Extract variables from response using JSONPath",
+          "patternProperties": {
+            "^[a-zA-Z_][a-zA-Z0-9_]*$": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+
+        "delay": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": ["name", "request"],
+      "additionalProperties": false
+    },
+
+    "request": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"]
+        },
+        "url": { "type": "string" },
+
+        "headers": {
+          "type": "object",
+          "patternProperties": {
+            ".*": { "type": ["string", "number", "boolean"] }
+          },
+          "additionalProperties": true
+        },
+
+        "query": {
+          "type": "object",
+          "patternProperties": {
+            ".*": {}
+          },
+          "additionalProperties": true
+        },
+
+        "body": {
+          "type": ["object", "string", "number", "array", "null"]
+        },
+
+        "timeout": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": ["method", "url"],
+      "additionalProperties": false
+    },
+
+    "expect": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "number" },
+
+        "headers": {
+          "type": "object",
+          "patternProperties": {
+            ".*": { "type": ["string", "number", "boolean"] }
+          },
+          "additionalProperties": true
+        },
+
+        "json": {
+          "type": ["object", "array"],
+          "description": "Deep equality check for JSON response"
+        },
+
+        "contains": {
+          "type": "string",
+          "description": "Check if raw response body contains substring"
+        },
+
+        "custom": {
+          "type": "string",
+          "description": "Custom JS assertion code"
+        }
+      },
+      "anyOf": [
+        { "required": ["status"] },
+        { "required": ["json"] },
+        { "required": ["contains"] },
+        { "required": ["custom"] }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

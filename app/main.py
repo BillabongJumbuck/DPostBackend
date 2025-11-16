@@ -1,7 +1,7 @@
 import json
 import logging
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -47,6 +47,233 @@ def health_check():
 def read_root():
 	logger.debug("read_root called")
 	return {"message": "Welcome to DPostBackend (FastAPI)"}
+
+
+class TestResultRequest(BaseModel):
+	repo_url: str
+	org: str | None = None
+	workflow_run_id: str | None = None
+	workflow_run_url: str | None = None
+	test_results: dict
+
+
+@app.post("/repos/test-results")
+async def submit_test_results(payload: TestResultRequest):
+	"""
+	Receive test results from GitHub Actions workflow.
+	"""
+	logger.info(
+		"POST /repos/test-results received: repo_url=%s, org=%s, workflow_run_id=%s",
+		payload.repo_url,
+		payload.org,
+		payload.workflow_run_id,
+	)
+
+	# Parse repository URL
+	parsed = parse_repo_url(payload.repo_url.strip())
+	if not parsed:
+		raise HTTPException(status_code=400, detail="Invalid GitHub repository URL")
+	original_owner, repo = parsed
+	repo_full_name = f"{original_owner}/{repo}"
+
+	# Normalize org
+	normalized_org = payload.org.strip() if payload.org and payload.org.strip() else None
+
+	# Save test results to file
+	import os
+	from pathlib import Path
+	from datetime import datetime
+
+	results_dir = Path(__file__).parent.parent / "data" / "test_results"
+	results_dir.mkdir(parents=True, exist_ok=True)
+
+	# Generate filename: {owner}_{repo}_{org}_{timestamp}.json
+	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+	if normalized_org:
+		filename = f"{original_owner}_{repo}_{normalized_org}_{timestamp}.json"
+	else:
+		filename = f"{original_owner}_{repo}_{timestamp}.json"
+	
+	results_file = results_dir / filename
+
+	try:
+		# Add metadata to test results
+		results_with_metadata = {
+			"repo_url": payload.repo_url,
+			"repo_full_name": repo_full_name,
+			"org": normalized_org,
+			"workflow_run_id": payload.workflow_run_id,
+			"workflow_run_url": payload.workflow_run_url,
+			"received_at": datetime.now().isoformat(),
+			"test_results": payload.test_results,
+		}
+
+		with open(results_file, "w", encoding="utf-8") as f:
+			json.dump(results_with_metadata, f, indent=2, ensure_ascii=False)
+
+		logger.info("Test results saved to: %s", results_file)
+
+		return {
+			"status": "ok",
+			"message": "Test results received and saved successfully",
+			"file_path": str(results_file),
+			"repo_full_name": repo_full_name,
+			"org": normalized_org,
+		}
+	except Exception as e:
+		logger.error("Error saving test results: %s", e, exc_info=True)
+		raise HTTPException(status_code=500, detail=f"Error saving test results: {e}")
+
+
+@app.get("/repos/test-results")
+async def get_test_results(
+	repo_url: str = Query(..., description="GitHub repository URL (e.g., https://github.com/owner/repo)"),
+	org: str | None = Query(None, description="Organization name"),
+):
+	"""
+	Get the latest test result file for a repository.
+	Returns the most recent test result JSON file matching the repository URL and optional org.
+	Supports both original repository URLs and fork repository URLs.
+	"""
+	import os
+	from pathlib import Path
+	from datetime import datetime
+
+	logger.info(
+		"GET /repos/test-results received: repo_url=%s, org=%s",
+		repo_url,
+		org,
+	)
+
+	results_dir = Path(__file__).parent.parent / "data" / "test_results"
+	
+	if not results_dir.exists():
+		raise HTTPException(status_code=404, detail="No test results found")
+
+	# Parse repository URL
+	parsed = parse_repo_url(repo_url.strip())
+	if not parsed:
+		raise HTTPException(status_code=400, detail="Invalid GitHub repository URL")
+	owner, repo = parsed
+	repo_full_name = f"{owner}/{repo}"
+
+	# Normalize org
+	normalized_org = org.strip() if org and org.strip() else None
+
+	# Try to find fork information from database (in case query is for original repo)
+	# This helps us find test results that were saved with fork repo name
+	fork_full_name = None
+	try:
+		fork_info = await get_cached_response(repo_full_name, normalized_org)
+		if fork_info:
+			fork_full_name = fork_info.get("full_name")
+			logger.debug("Found fork info: original=%s, fork=%s", repo_full_name, fork_full_name)
+	except Exception as e:
+		logger.debug("Could not get fork info for %s (org=%s): %s", repo_full_name, normalized_org, e)
+
+	# Get all test result files, sorted by modification time (newest first)
+	all_files = sorted(results_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+	
+	# Find the latest matching file
+	for file_path in all_files:
+		filename = file_path.name
+		
+		# Read file and check if it matches
+		try:
+			with open(file_path, "r", encoding="utf-8") as f:
+				file_data = json.load(f)
+			
+			# Extract repository info from file data
+			file_repo_full_name = file_data.get("repo_full_name", "")
+			file_org = file_data.get("org")
+			
+			# Parse repo_full_name to get owner and repo
+			if not file_repo_full_name:
+				continue
+			
+			parts = file_repo_full_name.split("/")
+			if len(parts) != 2:
+				continue
+			
+			file_owner = parts[0]
+			file_repo = parts[1]
+			
+			# Check if it matches the query (either original repo or fork repo)
+			matches_repo = False
+			if file_owner == owner and file_repo == repo:
+				# Direct match (query is for fork repo or same repo)
+				matches_repo = True
+			elif fork_full_name and file_repo_full_name == fork_full_name:
+				# Match via fork mapping (query is for original repo, file has fork repo)
+				matches_repo = True
+			
+			if not matches_repo:
+				continue
+			
+			# Check org match
+			if normalized_org is not None:
+				if normalized_org and file_org != normalized_org:
+					continue
+				if not normalized_org and file_org is not None:
+					continue
+			else:
+				# If org not specified, prefer files without org, but also accept files with org
+				pass
+			
+			# Found matching file, return it
+			return {
+				"status": "ok",
+				"filename": filename,
+				"data": file_data,
+			}
+		except Exception as e:
+			logger.warning("Error reading test result file %s: %s", filename, e)
+			continue
+
+	# No matching file found
+	raise HTTPException(
+		status_code=404,
+		detail=f"No test results found for repository {owner}/{repo}" + (f" (org={normalized_org})" if normalized_org else "")
+	)
+
+
+@app.get("/repos/test-results/{filename}")
+async def get_test_result_file(filename: str):
+	"""
+	Get a specific test result file by filename.
+	"""
+	import os
+	from pathlib import Path
+
+	logger.info("GET /repos/test-results/%s received", filename)
+
+	# Security: prevent path traversal
+	if ".." in filename or "/" in filename or "\\" in filename:
+		raise HTTPException(status_code=400, detail="Invalid filename")
+
+	results_dir = Path(__file__).parent.parent / "data" / "test_results"
+	file_path = results_dir / filename
+
+	if not file_path.exists():
+		raise HTTPException(status_code=404, detail=f"Test result file not found: {filename}")
+
+	if not file_path.is_file():
+		raise HTTPException(status_code=400, detail="Invalid file path")
+
+	try:
+		with open(file_path, "r", encoding="utf-8") as f:
+			file_data = json.load(f)
+		
+		return {
+			"status": "ok",
+			"filename": filename,
+			"data": file_data,
+		}
+	except json.JSONDecodeError as e:
+		raise HTTPException(status_code=500, detail=f"Invalid JSON in test result file: {e}")
+	except Exception as e:
+		logger.error("Error reading test result file: %s", e, exc_info=True)
+		raise HTTPException(status_code=500, detail=f"Error reading test result file: {e}")
 
 
 class ForkRequest(BaseModel):
@@ -323,6 +550,9 @@ async def _push_test_case_and_workflow(
 	Helper function to push test case and workflow to GitHub repository.
 	Returns dict with push results.
 	"""
+	import os
+	from pathlib import Path
+	
 	# Parse repository URL to get owner and repo
 	parsed = parse_repo_url(f"https://github.com/{repo_full_name}")
 	if not parsed:
@@ -352,7 +582,6 @@ async def _push_test_case_and_workflow(
 		raise ValueError(f"Test case file for {repo_full_name} not found.")
 
 	# Get backend API URL
-	import os
 	api_url = backend_api_url or os.getenv("BACKEND_API_URL", "http://localhost:8000")
 
 	results = {
@@ -360,6 +589,63 @@ async def _push_test_case_and_workflow(
 		"workflow_triggered": False,
 		"fork_full_name": fork_full_name,
 	}
+
+	# Check if this is the first time pushing test files (check if test_case.json exists in repo)
+	test_case_exists_in_repo = await get_file_content(
+		fork_owner=fork_owner,
+		repo=fork_repo,
+		path="test_case.json",
+		branch=default_branch,
+	)
+	is_first_push = test_case_exists_in_repo is None
+
+	# Push test runner files on first push
+	if is_first_push:
+		logger.info("First push detected, pushing test runner files...")
+		
+		# Files to push: test-runner.js, schema/jsonSchemaValidator.js, schema/schema.json
+		test_files = [
+			("test-runner.js", "test-runner.js"),
+			("schema/jsonSchemaValidator.js", "schema/jsonSchemaValidator.js"),
+			("schema/schema.json", "schema/schema.json"),
+		]
+		
+		for local_path, repo_path in test_files:
+			try:
+				file_path = Path(__file__).parent.parent / local_path
+				if not file_path.exists():
+					logger.warning("Test file not found locally: %s, skipping...", local_path)
+					continue
+				
+				# Check if file already exists in repo
+				existing_file = await get_file_content(
+					fork_owner=fork_owner,
+					repo=fork_repo,
+					path=repo_path,
+					branch=default_branch,
+				)
+				
+				if existing_file is None:
+					# Read file content
+					with open(file_path, "r", encoding="utf-8") as f:
+						file_content = f.read()
+					
+					# Push file
+					await create_or_update_file(
+						fork_owner=fork_owner,
+						repo=fork_repo,
+						path=repo_path,
+						content=file_content,
+						message=f"Add {repo_path} for API testing [skip ci]",
+						branch=default_branch,
+					)
+					results["files_pushed"].append(repo_path)
+					logger.info("Test file pushed successfully: %s", repo_path)
+				else:
+					logger.info("Test file already exists in repo: %s, skipping...", repo_path)
+			except Exception as e:
+				logger.warning("Error pushing test file %s: %s, continuing...", local_path, e, exc_info=True)
+				# Don't fail the whole process if test file push fails
 
 	# Push test case file
 	try:
@@ -454,6 +740,13 @@ class PushTestCaseRequest(BaseModel):
 	repo_url: str
 	org: str | None = None
 	tech_stack: str
+	backend_api_url: str | None = None
+
+
+class UpdateWorkflowRequest(BaseModel):
+	repo_url: str
+	org: str | None = None
+	tech_stack: str | None = None
 	backend_api_url: str | None = None
 
 
@@ -579,5 +872,139 @@ async def push_test_case_to_repo(payload: PushTestCaseRequest):
 	except Exception as e:
 		logger.error("Error pushing GitHub Actions workflow: %s", e, exc_info=True)
 		raise HTTPException(status_code=500, detail=f"Error pushing GitHub Actions workflow: {e}")
+
+	return results
+
+
+@app.put("/repos/update-workflow")
+async def update_workflow(payload: UpdateWorkflowRequest):
+	"""
+	Update the GitHub Actions workflow file in the forked repository.
+	This will regenerate the workflow using the latest workflow_generator.py logic.
+	Requires the repository to be forked.
+	
+	If tech_stack is not provided, it will try to infer from existing workflow or test case.
+	"""
+	logger.info(
+		"PUT /repos/update-workflow received: repo_url=%s, org=%s, tech_stack=%s",
+		payload.repo_url,
+		payload.org,
+		payload.tech_stack,
+	)
+
+	# Parse repository URL
+	parsed = parse_repo_url(payload.repo_url.strip())
+	if not parsed:
+		raise HTTPException(status_code=400, detail="Invalid GitHub repository URL")
+	original_owner, repo = parsed
+	repo_full_name = f"{original_owner}/{repo}"
+
+	# Normalize org
+	normalized_org = payload.org.strip() if payload.org and payload.org.strip() else None
+
+	# Check if repository exists in database
+	exists = await repository_exists(repo_full_name, normalized_org)
+	if not exists:
+		raise HTTPException(
+			status_code=404,
+			detail=f"Repository {repo_full_name} (org={normalized_org}) not found in database. Please fork it first.",
+		)
+
+	# Get fork information from cache
+	fork_info = await get_cached_response(repo_full_name, normalized_org)
+	if not fork_info:
+		raise HTTPException(
+			status_code=404,
+			detail=f"Fork information for {repo_full_name} (org={normalized_org}) not found in cache.",
+		)
+
+	# Extract fork owner and repo name from fork response
+	fork_owner = fork_info.get("owner", {}).get("login")
+	if not fork_owner:
+		raise HTTPException(
+			status_code=500,
+			detail="Failed to extract fork owner from cached response. Please fork the repository again.",
+		)
+	fork_repo = fork_info.get("name", repo)
+	fork_full_name = fork_info.get("full_name", f"{fork_owner}/{fork_repo}")
+	
+	# Get default branch (default to "main", fallback to "master")
+	default_branch = fork_info.get("default_branch", "main")
+	if default_branch not in ["main", "master"]:
+		default_branch = "main"  # Fallback to main if unknown
+
+	# Determine tech_stack if not provided
+	tech_stack = payload.tech_stack
+	if not tech_stack:
+		# Try to get tech_stack from existing test case metadata or workflow
+		# For now, we'll require it to be provided, but we could enhance this later
+		raise HTTPException(
+			status_code=400,
+			detail="tech_stack is required. Please provide one of: springboot_maven, nodejs_express, python_flask",
+		)
+
+	# Validate tech_stack
+	valid_tech_stacks = ["springboot_maven", "nodejs_express", "python_flask"]
+	if tech_stack not in valid_tech_stacks:
+		raise HTTPException(
+			status_code=400,
+			detail=f"Invalid tech_stack. Must be one of: {', '.join(valid_tech_stacks)}",
+		)
+
+	# Get backend API URL (from payload or environment variable)
+	import os
+	backend_api_url = payload.backend_api_url or os.getenv("BACKEND_API_URL", "http://localhost:8000")
+
+	# Prepare results
+	results = {
+		"status": "ok",
+		"message": "Workflow updated successfully",
+		"repo_full_name": repo_full_name,
+		"fork_full_name": fork_full_name,
+		"org": normalized_org,
+		"tech_stack": tech_stack,
+		"workflow_updated": False,
+	}
+
+	# Generate and push GitHub Actions workflow
+	try:
+		workflow_content = generate_workflow(
+			tech_stack=tech_stack,
+			test_case_path="test_case.json",
+			backend_api_url=backend_api_url,
+		)
+		
+		# Check if workflow file exists
+		existing_workflow = await get_file_content(
+			fork_owner=fork_owner,
+			repo=fork_repo,
+			path=".github/workflows/api-test.yml",
+			branch=default_branch,
+		)
+		
+		if existing_workflow is None:
+			logger.warning("Workflow file does not exist in repository, creating new one")
+		
+		# Always update the workflow (since user explicitly requested it)
+		await create_or_update_file(
+			fork_owner=fork_owner,
+			repo=fork_repo,
+			path=".github/workflows/api-test.yml",
+			content=workflow_content,
+			message="Update GitHub Actions workflow for API testing [skip ci]",
+			branch=default_branch,
+		)
+		results["workflow_updated"] = True
+		logger.info("GitHub Actions workflow updated successfully in %s", fork_full_name)
+		
+		# If workflow was newly created, wait a bit for GitHub to register it
+		if existing_workflow is None:
+			import asyncio
+			logger.info("Workflow file is new, waiting 3 seconds for GitHub to register it...")
+			await asyncio.sleep(3)
+			
+	except Exception as e:
+		logger.error("Error updating GitHub Actions workflow: %s", e, exc_info=True)
+		raise HTTPException(status_code=500, detail=f"Error updating GitHub Actions workflow: {e}")
 
 	return results

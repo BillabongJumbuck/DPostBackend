@@ -3,6 +3,7 @@ uvicorn[standard]
 httpx
 SQLAlchemy
 python-multipart
+python-dotenv
 
 
 
