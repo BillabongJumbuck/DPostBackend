@@ -1,7 +1,7 @@
 import json
 import logging
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -123,6 +123,136 @@ async def submit_test_results(payload: TestResultRequest):
 	except Exception as e:
 		logger.error("Error saving test results: %s", e, exc_info=True)
 		raise HTTPException(status_code=500, detail=f"Error saving test results: {e}")
+
+
+@app.get("/repos/test-results")
+async def get_test_results(
+	repo_url: str = Query(..., description="GitHub repository URL (e.g., https://github.com/owner/repo)"),
+	org: str | None = Query(None, description="Organization name"),
+):
+	"""
+	Get the latest test result file for a repository.
+	Returns the most recent test result JSON file matching the repository URL and optional org.
+	"""
+	import os
+	from pathlib import Path
+	from datetime import datetime
+
+	logger.info(
+		"GET /repos/test-results received: repo_url=%s, org=%s",
+		repo_url,
+		org,
+	)
+
+	results_dir = Path(__file__).parent.parent / "data" / "test_results"
+	
+	if not results_dir.exists():
+		raise HTTPException(status_code=404, detail="No test results found")
+
+	# Parse repository URL
+	parsed = parse_repo_url(repo_url.strip())
+	if not parsed:
+		raise HTTPException(status_code=400, detail="Invalid GitHub repository URL")
+	owner, repo = parsed
+
+	# Normalize org
+	normalized_org = org.strip() if org and org.strip() else None
+
+	# Get all test result files, sorted by modification time (newest first)
+	all_files = sorted(results_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+	
+	# Find the latest matching file
+	for file_path in all_files:
+		filename = file_path.name
+		
+		# Read file and check if it matches
+		try:
+			with open(file_path, "r", encoding="utf-8") as f:
+				file_data = json.load(f)
+			
+			# Extract repository info from file data
+			file_repo_full_name = file_data.get("repo_full_name", "")
+			file_org = file_data.get("org")
+			
+			# Parse repo_full_name to get owner and repo
+			if file_repo_full_name:
+				parts = file_repo_full_name.split("/")
+				if len(parts) == 2:
+					file_owner = parts[0]
+					file_repo = parts[1]
+				else:
+					continue
+			else:
+				continue
+			
+			# Check if it matches
+			if file_owner != owner or file_repo != repo:
+				continue
+			
+			# Check org match
+			if normalized_org is not None:
+				if normalized_org and file_org != normalized_org:
+					continue
+				if not normalized_org and file_org is not None:
+					continue
+			else:
+				# If org not specified, prefer files without org, but also accept files with org
+				pass
+			
+			# Found matching file, return it
+			return {
+				"status": "ok",
+				"filename": filename,
+				"data": file_data,
+			}
+		except Exception as e:
+			logger.warning("Error reading test result file %s: %s", filename, e)
+			continue
+
+	# No matching file found
+	raise HTTPException(
+		status_code=404,
+		detail=f"No test results found for repository {owner}/{repo}" + (f" (org={normalized_org})" if normalized_org else "")
+	)
+
+
+@app.get("/repos/test-results/{filename}")
+async def get_test_result_file(filename: str):
+	"""
+	Get a specific test result file by filename.
+	"""
+	import os
+	from pathlib import Path
+
+	logger.info("GET /repos/test-results/%s received", filename)
+
+	# Security: prevent path traversal
+	if ".." in filename or "/" in filename or "\\" in filename:
+		raise HTTPException(status_code=400, detail="Invalid filename")
+
+	results_dir = Path(__file__).parent.parent / "data" / "test_results"
+	file_path = results_dir / filename
+
+	if not file_path.exists():
+		raise HTTPException(status_code=404, detail=f"Test result file not found: {filename}")
+
+	if not file_path.is_file():
+		raise HTTPException(status_code=400, detail="Invalid file path")
+
+	try:
+		with open(file_path, "r", encoding="utf-8") as f:
+			file_data = json.load(f)
+		
+		return {
+			"status": "ok",
+			"filename": filename,
+			"data": file_data,
+		}
+	except json.JSONDecodeError as e:
+		raise HTTPException(status_code=500, detail=f"Invalid JSON in test result file: {e}")
+	except Exception as e:
+		logger.error("Error reading test result file: %s", e, exc_info=True)
+		raise HTTPException(status_code=500, detail=f"Error reading test result file: {e}")
 
 
 class ForkRequest(BaseModel):
