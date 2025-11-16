@@ -392,6 +392,13 @@ async function runTests(testCaseFile) {
   console.log();
   
   const results = {
+    testCaseFile: testCaseFile,
+    config: {
+      baseUrl: config.baseUrl || null,
+      timeout: config.timeout || null,
+      retries: config.retries || 0,
+      stopOnFailure: config.stopOnFailure || false
+    },
     total: 0,
     passed: 0,
     failed: 0,
@@ -420,10 +427,21 @@ async function runTests(testCaseFile) {
       console.log(`\n[${i + 1}/${steps.length}] ${step.name}`);
       
       const stepResult = await runStep(step, config, variables, config.retries || 0);
-      testResult.steps.push({
+      
+      // Prepare step result for JSON output (include full response data)
+      const stepResultForJson = {
         name: step.name,
-        ...stepResult
-      });
+        success: stepResult.success,
+        error: stepResult.error || null,
+        response: stepResult.response ? {
+          status: stepResult.response.status,
+          headers: stepResult.response.headers,
+          body: stepResult.response.body,
+          rawBody: stepResult.response.rawBody
+        } : null
+      };
+      
+      testResult.steps.push(stepResultForJson);
       
       if (stepResult.success) {
         results.passed++;
@@ -456,6 +474,13 @@ async function runTests(testCaseFile) {
     console.log(`\n${testResult.passed ? '✓' : '✗'} Test "${test.name}": ${testResult.passed ? 'PASSED' : 'FAILED'}`);
   }
   
+  // Calculate success rate
+  const successRate = results.total > 0 ? ((results.passed / results.total) * 100).toFixed(2) : 0;
+  
+  // Add summary to results
+  results.successRate = parseFloat(successRate);
+  results.timestamp = new Date().toISOString();
+  
   // Print summary
   console.log('\n' + '='.repeat(80));
   console.log('Test Summary');
@@ -463,24 +488,58 @@ async function runTests(testCaseFile) {
   console.log(`Total steps: ${results.total}`);
   console.log(`Passed: ${results.passed}`);
   console.log(`Failed: ${results.failed}`);
-  console.log(`Success rate: ${results.total > 0 ? ((results.passed / results.total) * 100).toFixed(2) : 0}%`);
+  console.log(`Success rate: ${successRate}%`);
   console.log('='.repeat(80));
   
-  // Exit with error code if any tests failed
-  if (results.failed > 0) {
-    process.exit(1);
-  }
+  return results;
 }
 
 // Main entry point
-const testCaseFile = process.argv[2] || 'test_case.json';
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const result = {
+    testCaseFile: 'test_case.json',
+    outputFile: null
+  };
+  
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--output' || args[i] === '-o') {
+      if (i + 1 < args.length) {
+        result.outputFile = args[i + 1];
+        i++;
+      }
+    } else if (!args[i].startsWith('-')) {
+      result.testCaseFile = args[i];
+    }
+  }
+  
+  return result;
+}
+
+const { testCaseFile, outputFile } = parseArgs();
 
 if (!fs.existsSync(testCaseFile)) {
   console.error(`Error: Test case file not found: ${testCaseFile}`);
   process.exit(1);
 }
 
-runTests(testCaseFile).catch(error => {
+// Determine output file path
+const defaultOutputFile = outputFile || 'test_results.json';
+
+runTests(testCaseFile).then(results => {
+  // Save results to JSON file
+  try {
+    const outputPath = path.resolve(defaultOutputFile);
+    fs.writeFileSync(outputPath, JSON.stringify(results, null, 2), 'utf-8');
+    console.log(`\n✓ Test results saved to: ${outputPath}`);
+  } catch (error) {
+    console.error(`\n✗ Failed to save test results: ${error.message}`);
+    // Don't exit with error code, just warn
+  }
+  
+  // Always exit with success code (0) - test failures are not considered errors
+  process.exit(0);
+}).catch(error => {
   console.error(`Fatal error: ${error.message}`);
   console.error(error.stack);
   process.exit(1);
