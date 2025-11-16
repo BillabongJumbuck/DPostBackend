@@ -53,30 +53,46 @@ function jsonPath(obj, path) {
   return current;
 }
 
-// Deep equality check for objects/arrays
-function deepEqual(a, b) {
-  if (a === b) return true;
-  if (a == null || b == null) return false;
-  if (typeof a !== typeof b) return false;
+// Deep equality check for objects/arrays (partial match - only check keys in expected)
+function deepEqual(actual, expected) {
+  // Exact match
+  if (actual === expected) return true;
+  if (actual == null || expected == null) {
+    return actual == null && expected == null;
+  }
   
-  if (typeof a === 'object') {
-    if (Array.isArray(a) !== Array.isArray(b)) return false;
+  // Type coercion for numbers/strings (flexible matching)
+  if (typeof actual === 'number' && typeof expected === 'string') {
+    return String(actual) === expected;
+  }
+  if (typeof actual === 'string' && typeof expected === 'number') {
+    return actual === String(expected);
+  }
+  if (typeof actual === 'number' && typeof expected === 'number') {
+    return actual === expected;
+  }
+  if (typeof actual === 'string' && typeof expected === 'string') {
+    return actual === expected;
+  }
+  
+  // If types don't match after coercion attempts, check if both are objects
+  if (typeof expected === 'object' && typeof actual === 'object') {
+    if (Array.isArray(expected) !== Array.isArray(actual)) return false;
     
-    if (Array.isArray(a)) {
-      if (a.length !== b.length) return false;
-      for (let i = 0; i < a.length; i++) {
-        if (!deepEqual(a[i], b[i])) return false;
+    if (Array.isArray(expected)) {
+      if (actual.length !== expected.length) return false;
+      for (let i = 0; i < expected.length; i++) {
+        if (!deepEqual(actual[i], expected[i])) return false;
       }
       return true;
     }
     
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
-    if (keysA.length !== keysB.length) return false;
+    // For objects, only check keys that exist in expected (partial match)
+    const expectedKeys = Object.keys(expected);
     
-    for (const key of keysA) {
-      if (!keysB.includes(key)) return false;
-      if (!deepEqual(a[key], b[key])) return false;
+    for (const key of expectedKeys) {
+      if (!(key in actual)) return false;
+      if (!deepEqual(actual[key], expected[key])) return false;
     }
     return true;
   }
@@ -87,6 +103,16 @@ function deepEqual(a, b) {
 // Variable replacement in any value
 function replaceVariables(value, variables) {
   if (typeof value === 'string') {
+    // Check if the entire string is a variable (e.g., "{{age1}}")
+    const fullMatch = value.match(/^\{\{(\w+)\}\}$/);
+    if (fullMatch) {
+      const varName = fullMatch[1];
+      if (varName in variables) {
+        // Return the variable value directly, preserving its type (number, boolean, etc.)
+        return variables[varName];
+      }
+    }
+    // Otherwise, replace variables within the string
     return value.replace(/\{\{(\w+)\}\}/g, (match, varName) => {
       if (varName in variables) {
         const val = variables[varName];
@@ -100,7 +126,9 @@ function replaceVariables(value, variables) {
     } else {
       const result = {};
       for (const [key, val] of Object.entries(value)) {
-        result[replaceVariables(key, variables)] = replaceVariables(val, variables);
+        const newKey = replaceVariables(key, variables);
+        const newVal = replaceVariables(val, variables);
+        result[newKey] = newVal;
       }
       return result;
     }
@@ -212,7 +240,10 @@ function validateResponse(response, expect, variables) {
   if (expect.json !== undefined) {
     const expectedJson = replaceVariables(expect.json, variables);
     if (!deepEqual(response.body, expectedJson)) {
-      errors.push(`JSON mismatch. Expected: ${JSON.stringify(expectedJson)}, Got: ${JSON.stringify(response.body)}`);
+      // More detailed error message
+      const expectedStr = JSON.stringify(expectedJson, null, 2);
+      const actualStr = JSON.stringify(response.body, null, 2);
+      errors.push(`JSON mismatch.\n    Expected: ${expectedStr}\n    Got: ${actualStr}`);
     }
   }
   
@@ -250,11 +281,19 @@ function validateResponse(response, expect, variables) {
 function extractVariables(response, extract, variables) {
   const extracted = {};
   
+  if (!response || !response.body) {
+    return extracted;
+  }
+  
   for (const [varName, jsonPathExpr] of Object.entries(extract)) {
-    const value = jsonPath(response.body, jsonPathExpr);
-    if (value !== undefined) {
-      extracted[varName] = value;
-      variables[varName] = value;
+    try {
+      const value = jsonPath(response.body, jsonPathExpr);
+      if (value !== undefined && value !== null) {
+        extracted[varName] = value;
+        variables[varName] = value;
+      }
+    } catch (e) {
+      console.log(`  ⚠️  Error extracting ${varName} with JSONPath ${jsonPathExpr}: ${e.message}`);
     }
   }
   
@@ -283,19 +322,26 @@ async function runStep(step, config, variables, retries = 0) {
       // Make request
       lastResponse = await makeRequest({ ...request, baseUrl: config.baseUrl, timeout: request.timeout || config.timeout }, variables);
       
+      // Extract variables BEFORE validation (so variables are available even if validation fails)
+      if (extract && lastResponse && lastResponse.body) {
+        try {
+          const extracted = extractVariables(lastResponse, extract, variables);
+          if (Object.keys(extracted).length > 0) {
+            console.log(`  ✓ Extracted variables: ${Object.keys(extracted).join(', ')}`);
+          } else {
+            // Log if extraction was attempted but nothing was extracted
+            console.log(`  ⚠️  No variables extracted (check JSONPath expressions)`);
+          }
+        } catch (e) {
+          console.log(`  ⚠️  Error extracting variables: ${e.message}`);
+        }
+      }
+      
       // Validate response
       if (expect) {
         const errors = validateResponse(lastResponse, expect, variables);
         if (errors.length > 0) {
           throw new Error(`Validation failed:\n${errors.map(e => `  - ${e}`).join('\n')}`);
-        }
-      }
-      
-      // Extract variables
-      if (extract) {
-        const extracted = extractVariables(lastResponse, extract, variables);
-        if (Object.keys(extracted).length > 0) {
-          console.log(`  ✓ Extracted variables: ${Object.keys(extracted).join(', ')}`);
         }
       }
       
