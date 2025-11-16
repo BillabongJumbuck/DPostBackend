@@ -49,6 +49,82 @@ def read_root():
 	return {"message": "Welcome to DPostBackend (FastAPI)"}
 
 
+class TestResultRequest(BaseModel):
+	repo_url: str
+	org: str | None = None
+	workflow_run_id: str | None = None
+	workflow_run_url: str | None = None
+	test_results: dict
+
+
+@app.post("/repos/test-results")
+async def submit_test_results(payload: TestResultRequest):
+	"""
+	Receive test results from GitHub Actions workflow.
+	"""
+	logger.info(
+		"POST /repos/test-results received: repo_url=%s, org=%s, workflow_run_id=%s",
+		payload.repo_url,
+		payload.org,
+		payload.workflow_run_id,
+	)
+
+	# Parse repository URL
+	parsed = parse_repo_url(payload.repo_url.strip())
+	if not parsed:
+		raise HTTPException(status_code=400, detail="Invalid GitHub repository URL")
+	original_owner, repo = parsed
+	repo_full_name = f"{original_owner}/{repo}"
+
+	# Normalize org
+	normalized_org = payload.org.strip() if payload.org and payload.org.strip() else None
+
+	# Save test results to file
+	import os
+	from pathlib import Path
+	from datetime import datetime
+
+	results_dir = Path(__file__).parent.parent / "data" / "test_results"
+	results_dir.mkdir(parents=True, exist_ok=True)
+
+	# Generate filename: {owner}_{repo}_{org}_{timestamp}.json
+	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+	if normalized_org:
+		filename = f"{original_owner}_{repo}_{normalized_org}_{timestamp}.json"
+	else:
+		filename = f"{original_owner}_{repo}_{timestamp}.json"
+	
+	results_file = results_dir / filename
+
+	try:
+		# Add metadata to test results
+		results_with_metadata = {
+			"repo_url": payload.repo_url,
+			"repo_full_name": repo_full_name,
+			"org": normalized_org,
+			"workflow_run_id": payload.workflow_run_id,
+			"workflow_run_url": payload.workflow_run_url,
+			"received_at": datetime.now().isoformat(),
+			"test_results": payload.test_results,
+		}
+
+		with open(results_file, "w", encoding="utf-8") as f:
+			json.dump(results_with_metadata, f, indent=2, ensure_ascii=False)
+
+		logger.info("Test results saved to: %s", results_file)
+
+		return {
+			"status": "ok",
+			"message": "Test results received and saved successfully",
+			"file_path": str(results_file),
+			"repo_full_name": repo_full_name,
+			"org": normalized_org,
+		}
+	except Exception as e:
+		logger.error("Error saving test results: %s", e, exc_info=True)
+		raise HTTPException(status_code=500, detail=f"Error saving test results: {e}")
+
+
 class ForkRequest(BaseModel):
 	repo_url: str
 	org: str | None = None

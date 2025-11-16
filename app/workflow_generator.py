@@ -105,6 +105,34 @@ jobs:
         run: |
           node test-runner.js {test_case_path}
       
+      - name: Send test results to backend
+        if: always()
+        run: |
+          if [ -f test_results.json ]; then
+            echo "Sending test results to backend..."
+            REPO_URL="${{{{ github.repository }}}}"
+            ORG="${{{{ github.repository_owner }}}}"
+            WORKFLOW_RUN_ID="${{{{ github.run_id }}}}"
+            WORKFLOW_RUN_URL="${{{{ github.server_url }}}}/${{{{ github.repository }}}}/actions/runs/${{{{ github.run_id }}}}"
+            
+            # Build JSON payload using jq
+            PAYLOAD=$(jq -n \\
+              --arg repo_url "https://github.com/$REPO_URL" \\
+              --arg org "$ORG" \\
+              --arg workflow_run_id "$WORKFLOW_RUN_ID" \\
+              --arg workflow_run_url "$WORKFLOW_RUN_URL" \\
+              --slurpfile test_results test_results.json \\
+              '{{repo_url: $repo_url, org: $org, workflow_run_id: $workflow_run_id, workflow_run_url: $workflow_run_url, test_results: $test_results[0]}}')
+            
+            curl -X POST "${{{{ env.backend_api_url }}}}/repos/test-results" \\
+              -H "Content-Type: application/json" \\
+              -d "$PAYLOAD" || echo "Failed to send test results, but continuing..."
+          else
+            echo "test_results.json not found, skipping..."
+          fi
+        env:
+          backend_api_url: {backend_api_url}
+      
       - name: Stop application
         if: always()
         run: pkill -f "java -jar"
@@ -185,6 +213,34 @@ jobs:
         id: test
         run: |
           node test-runner.js {test_case_path}
+      
+      - name: Send test results to backend
+        if: always()
+        run: |
+          if [ -f test_results.json ]; then
+            echo "Sending test results to backend..."
+            REPO_URL="${{{{ github.repository }}}}"
+            ORG="${{{{ github.repository_owner }}}}"
+            WORKFLOW_RUN_ID="${{{{ github.run_id }}}}"
+            WORKFLOW_RUN_URL="${{{{ github.server_url }}}}/${{{{ github.repository }}}}/actions/runs/${{{{ github.run_id }}}}"
+            
+            # Build JSON payload using jq
+            PAYLOAD=$(jq -n \\
+              --arg repo_url "https://github.com/$REPO_URL" \\
+              --arg org "$ORG" \\
+              --arg workflow_run_id "$WORKFLOW_RUN_ID" \\
+              --arg workflow_run_url "$WORKFLOW_RUN_URL" \\
+              --slurpfile test_results test_results.json \\
+              '{{repo_url: $repo_url, org: $org, workflow_run_id: $workflow_run_id, workflow_run_url: $workflow_run_url, test_results: $test_results[0]}}')
+            
+            curl -X POST "${{{{ env.backend_api_url }}}}/repos/test-results" \\
+              -H "Content-Type: application/json" \\
+              -d "$PAYLOAD" || echo "Failed to send test results, but continuing..."
+          else
+            echo "test_results.json not found, skipping..."
+          fi
+        env:
+          backend_api_url: {backend_api_url}
       
       - name: Stop application
         if: always()
@@ -272,6 +328,34 @@ jobs:
         id: test
         run: |
           node test-runner.js {test_case_path}
+      
+      - name: Send test results to backend
+        if: always()
+        run: |
+          if [ -f test_results.json ]; then
+            echo "Sending test results to backend..."
+            REPO_URL="${{{{ github.repository }}}}"
+            ORG="${{{{ github.repository_owner }}}}"
+            WORKFLOW_RUN_ID="${{{{ github.run_id }}}}"
+            WORKFLOW_RUN_URL="${{{{ github.server_url }}}}/${{{{ github.repository }}}}/actions/runs/${{{{ github.run_id }}}}"
+            
+            # Build JSON payload using jq
+            PAYLOAD=$(jq -n \\
+              --arg repo_url "https://github.com/$REPO_URL" \\
+              --arg org "$ORG" \\
+              --arg workflow_run_id "$WORKFLOW_RUN_ID" \\
+              --arg workflow_run_url "$WORKFLOW_RUN_URL" \\
+              --slurpfile test_results test_results.json \\
+              '{{repo_url: $repo_url, org: $org, workflow_run_id: $workflow_run_id, workflow_run_url: $workflow_run_url, test_results: $test_results[0]}}')
+            
+            curl -X POST "${{{{ env.backend_api_url }}}}/repos/test-results" \\
+              -H "Content-Type: application/json" \\
+              -d "$PAYLOAD" || echo "Failed to send test results, but continuing..."
+          else
+            echo "test_results.json not found, skipping..."
+          fi
+        env:
+          backend_api_url: {backend_api_url}
       
       - name: Stop application
         if: always()
