@@ -221,6 +221,43 @@ python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --t
 - 此接口仅删除本地缓存（数据库中的缓存记录和测试用例文件），**不会删除 GitHub 上的仓库**
 - 删除操作不可逆，请谨慎使用
 
+### 同步 Fork（Sync fork to upstream）
+
+- 路径: `POST /repos/sync-upstream`
+- 请求体 (application/json):
+```json
+{
+  "repo_url": "https://github.com/owner/repo",
+  "org": "optional-org-name",
+  "branch": "main"
+}
+```
+- 说明:
+  - 由本服务使用配置在 `.env` 中的 `GITHUB_PAT`（服务账号）对 fork 仓库执行 GitHub 的 `merge-upstream` 操作，尝试将上游仓库的变更合并到 fork 的指定分支。
+  - 要求仓库之前已由本服务 fork 并存在本地缓存（也就是已调用过 `POST /repos/fork` 并成功），否则接口会返回 `404`。
+  - `branch` 为可选字段，默认 `main`。
+
+- 成功响应:
+  - `200`: 同步成功（GitHub 返回的具体 JSON 会被透传）
+  - `202`: 已接受，GitHub 已启动异步同步任务（可能在后台执行）
+
+- 失败响应:
+  - `400`: 请求不合法（比如无效的 `repo_url`）
+  - `404`: 本服务未找到该仓库的 fork 缓存记录（请先 fork）
+  - `502`: 代理到 GitHub 时出现错误（GitHub 返回 4xx/5xx）
+  - `500`: 服务器内部错误
+
+- 示例请求（PowerShell + curl）:
+```powershell
+$body = @{ repo_url = "https://github.com/original-owner/repo"; org = ""; branch = "main" } | ConvertTo-Json
+curl -X POST "http://127.0.0.1:8000/repos/sync-upstream" -H "Content-Type: application/json" -d $body
+```
+
+- 注意事项:
+  - `GITHUB_PAT` 需要具有对 fork 仓库进行合并/写操作的权限（通常需要 `repo` 范围）。
+  - GitHub 的 `merge-upstream` 可能返回 `200`（已完成）或 `202`（已接受并在后台处理）。本服务会把 GitHub 的响应内容原样返回给调用者。
+  - 如果希望在找不到 fork 信息时自动发起 fork 并等待结果，请告诉我，我可以把接口改为先执行 `fork_repository`。
+
 ### 推送测试用例和 GitHub Actions 配置
 - 路径: `POST /repos/push-test`
 - 请求体:
@@ -402,6 +439,26 @@ python .\scripts\update_workflow.py --repo-url https://github.com/owner/repo --t
   ```powershell
   pip freeze > requirements.txt
   ```
+
+### Test: 同步 Fork 脚本
+
+项目提供了一个简单的测试脚本用于调用 `POST /repos/sync-upstream` 接口，位于 `scripts/test_sync_upstream.py`。
+
+依赖：
+```powershell
+pip install requests python-dotenv
+```
+
+运行示例（PowerShell）：
+```powershell
+# 激活虚拟环境
+.\.venv\Scripts\Activate.ps1
+
+# 调用脚本（替换 repo_url）
+python .\scripts\test_sync_upstream.py --repo-url https://github.com/original-owner/repo --branch main
+```
+
+脚本会优先读取根目录下的 `.env` 中的 `BACKEND_API_URL` 作为后端地址，亦可通过 `--base-url` 参数覆盖。
 
 ## Git
 

@@ -374,3 +374,52 @@ async def trigger_workflow(
 		# Unexpected status code
 		logger.warning("Unexpected status code: %s", trigger_response.status_code)
 		return {"status": "unknown", "status_code": trigger_response.status_code}
+
+
+async def merge_upstream(
+    fork_owner: str,
+    repo: str,
+    branch: str = "main",
+    timeout_seconds: float = 15.0,
+) -> dict:
+    """
+    Trigger GitHub's 'Merge upstream' operation for a forked repository.
+
+    This calls POST /repos/{owner}/{repo}/merge-upstream with JSON {"branch": branch}.
+    Returns the parsed JSON response when available, or a dict containing status information.
+    Raises httpx.HTTPStatusError on 4xx/5xx responses.
+    """
+    logger.info("Merge upstream request: fork_owner=%s, repo=%s, branch=%s", fork_owner, repo, branch)
+
+    pat = get_github_pat()
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {pat}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "DPostBackend/0.1 (+fastapi; httpx)",
+    }
+
+    url = f"{GITHUB_API_BASE}/repos/{fork_owner}/{repo}/merge-upstream"
+    payload = {"branch": branch}
+
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.post(url, headers=headers, json=payload)
+        logger.info("GitHub merge-upstream response: status=%s", response.status_code)
+        # 200 OK or 202 Accepted are expected
+        if response.status_code >= 400:
+            try:
+                err_json = response.json()
+            except Exception:
+                err_json = {"message": response.text}
+            logger.error("GitHub API error %s: %s", response.status_code, err_json)
+            raise httpx.HTTPStatusError(
+                message=f"GitHub API error {response.status_code}: {err_json.get('message', 'Unknown error')}",
+                request=response.request,
+                response=response,
+            )
+
+        # Try to return JSON if present, otherwise return status info
+        try:
+            return response.json()
+        except Exception:
+            return {"status_code": response.status_code, "content": response.text}

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .cache import delete_cached_response, get_cached_response, repository_exists
 from .database import init_db
-from .github_client import create_or_update_file, fork_repository, get_file_content, parse_repo_url, trigger_workflow
+from .github_client import create_or_update_file, fork_repository, get_file_content, parse_repo_url, trigger_workflow, merge_upstream
 from .logging_config import configure_logging
 from .test_case_storage import delete_test_case, load_test_case, save_test_case, test_case_exists
 from .workflow_generator import generate_workflow
@@ -1008,3 +1008,66 @@ async def update_workflow(payload: UpdateWorkflowRequest):
 		raise HTTPException(status_code=500, detail=f"Error updating GitHub Actions workflow: {e}")
 
 	return results
+
+
+class SyncForkRequest(BaseModel):
+	repo_url: str
+	org: str | None = None
+	branch: str | None = "main"
+
+
+@app.post("/repos/sync-upstream")
+async def sync_fork(payload: SyncForkRequest):
+	"""
+	Trigger a sync of a forked repository with its upstream using the server account.
+	Request JSON: {"repo_url": "https://github.com/owner/repo", "org": "optional-org", "branch": "main"}
+	"""
+	logger.info("POST /repos/sync-upstream received: repo_url=%s, org=%s, branch=%s", payload.repo_url, payload.org, payload.branch)
+
+	# Parse repository URL
+	parsed = parse_repo_url(payload.repo_url.strip())
+	if not parsed:
+		raise HTTPException(status_code=400, detail="Invalid GitHub repository URL")
+	original_owner, repo = parsed
+	repo_full_name = f"{original_owner}/{repo}"
+
+	# Normalize org
+	normalized_org = payload.org.strip() if payload.org and payload.org.strip() else None
+
+	# Check repository exists in local cache
+	exists = await repository_exists(repo_full_name, normalized_org)
+	if not exists:
+		raise HTTPException(status_code=404, detail=f"Repository {repo_full_name} (org={normalized_org}) not found in database. Please fork it first.")
+
+	# Get fork info from cache
+	fork_info = await get_cached_response(repo_full_name, normalized_org)
+	if not fork_info:
+		raise HTTPException(status_code=404, detail=f"Fork information for {repo_full_name} (org={normalized_org}) not found in cache.")
+
+	fork_owner = fork_info.get("owner", {}).get("login")
+	if not fork_owner:
+		raise HTTPException(status_code=500, detail="Failed to extract fork owner from cached response. Please fork the repository again.")
+	fork_repo = fork_info.get("name", repo)
+
+	# Branch default
+	branch = payload.branch or "main"
+
+	# Call GitHub API to merge upstream into fork
+	try:
+		result = await merge_upstream(fork_owner=fork_owner, repo=fork_repo, branch=branch)
+		# result may be dict or empty; return a friendly response
+		return {
+			"status": "ok",
+			"message": "Sync request sent to GitHub",
+			"repo_full_name": repo_full_name,
+			"fork_full_name": fork_info.get("full_name"),
+			"branch": branch,
+			"data": result,
+		}
+	except Exception as e:
+		logger.error("Error syncing fork: %s", e, exc_info=True)
+		# If it's an HTTPStatusError from httpx, surface as 502
+		from httpx import HTTPStatusError
+		if isinstance(e, HTTPStatusError):
+			raise HTTPException(status_code=502, detail=str(e))
+		raise HTTPException(status_code=500, detail=str(e))
